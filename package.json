@@ -1,0 +1,19 @@
+{
+  "name": "fabrictest",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host --port 3000",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "vite": "^6.0.3"
+  },
+  "dependencies": {
+    "fabric": "4.3.0",
+    "lodash.flatten": "4.4.0",
+    "verb-nurbs-web": "2.1.3"
+  }
+}
