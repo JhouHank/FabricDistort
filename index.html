@@ -9,6 +9,7 @@
   <body>
     <canvas id="canvas"></canvas>
     <button id="toggleButton">toggle</button>
+    <div id="zoomLevel"></div>
     <script type="module" src="/src/main.js"></script>
     <style>
       #toggleButton {
@@ -16,6 +17,18 @@
         top: 10px;
         right: 10px;
         z-index: 10;
+      }
+      #zoomLevel {
+        position: absolute;
+        bottom: 10px;
+        right: 10px;
+        z-index: 10;
+        background-color: rgba(0, 0, 0, 0.5);
+        color: white;
+        padding: 5px 10px;
+        border-radius: 5px;
+        font-family: sans-serif;
+        font-size: 14px;
       }
     </style>
   </body>

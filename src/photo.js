@@ -146,21 +146,39 @@ fabric.Photo = class extends fabric.Image {
             anchorIndex,
             (_, transform, x, y) => {
               const target = transform.target;
-              // 計算滑鼠在物件局部座標中的位置
-              const localPoint = target.toLocalPoint(
-                new fabric.Point(x, y),
-                'left',
-                'top'
+              const mousePoint = new fabric.Point(x, y);
+
+              // 1. Get inverse transform of the object
+              const inverseMatrix = fabric.util.invertTransform(
+                target.calcTransformMatrix()
               );
 
-              // 將控制點的坐標更新為局部座標轉換後的結果（並考慮縮放比例）
-              coord[0] =
-                (localPoint.x / target.scaleX) * fabric.devicePixelRatio;
-              coord[1] =
-                (localPoint.y / target.scaleY) * fabric.devicePixelRatio;
+              // 2. Transform mouse point from canvas to local (center-based) coordinates
+              const centerBasedLocalPoint = fabric.util.transformPoint(
+                mousePoint,
+                inverseMatrix
+              );
 
-              target.setCoords(); // 更新物件的控制點
-              target.applyFilters(); // 套用透視濾鏡變化
+              // 3. Convert from center-based to top-left-based coordinates
+              const topLeftBasedLocalPoint = {
+                x: centerBasedLocalPoint.x + target.width / 2,
+                y: centerBasedLocalPoint.y + target.height / 2,
+              };
+
+              // 4. Update the perspective coordinate
+              coord[0] =
+                (topLeftBasedLocalPoint.x / target.scaleX) *
+                fabric.devicePixelRatio;
+              coord[1] =
+                (topLeftBasedLocalPoint.y / target.scaleY) *
+                fabric.devicePixelRatio;
+
+              // 5. Normalize the object's geometry based on the new point
+              target._resetSizeAndPosition(); // Simplified version
+
+              // 6. Update fabric's internal coordinates and apply filters
+              target.setCoords();
+              target.applyFilters();
 
               return true;
             }
@@ -250,12 +268,8 @@ fabric.Photo = class extends fabric.Image {
     return function (eventData, transform, x, y) {
       if (!transform || !eventData) return;
 
-      const { target } = transform;
-
-      // 拖曳前先重置大小和位置
-      target._resetSizeAndPosition(anchorIndex);
-
-      // 執行實際更新控制點座標的函式
+      // By moving the geometry calculation into the action handler itself,
+      // we can ensure the correct order of operations.
       const actionPerformed = fn(eventData, transform, x, y);
       return actionPerformed;
     };
@@ -267,43 +281,8 @@ fabric.Photo = class extends fabric.Image {
    * @param {boolean} apply 是否在重設後應用位移（預設為 true）
    */
   _resetSizeAndPosition = (index, apply = true) => {
-    // 將局部的座標點轉換為畫布上的絕對座標點
-    const absolutePoint = fabric.util.transformPoint(
-      {
-        x: this.perspectiveCoords[index][0],
-        y: this.perspectiveCoords[index][1],
-      },
-      this.calcTransformMatrix()
-    );
-
-    // 根據目前的所有控制點計算物件的新邊界
-    let { height, width, left, top } = this._calcDimensions({});
-
-    // 調整位置，使物件能對齊控制點的變化
-    const widthDiff = (width - this.width) / 2;
-    if ((left < 0 && widthDiff > 0) || (left > 0 && widthDiff < 0)) {
-      absolutePoint.x -= widthDiff;
-    } else {
-      absolutePoint.x += widthDiff;
-    }
-
-    const heightDiff = (height - this.height) / 2;
-    if ((top < 0 && heightDiff > 0) || (top > 0 && heightDiff < 0)) {
-      absolutePoint.y -= heightDiff;
-    } else {
-      absolutePoint.y += heightDiff;
-    }
-
     // 將計算結果套用回物件的屬性
     this._setPositionDimensions({});
-
-    // 計算無變形尺寸
-    const penBaseSize = this._getNonTransformedDimensions();
-    const newX = this.perspectiveCoords[index][0] / penBaseSize.x;
-    const newY = this.perspectiveCoords[index][1] / penBaseSize.y;
-
-    // 將物件的定位點設置在該控制點對應的新位置
-    this.setPositionByOrigin(absolutePoint, newX + 0.5, newY + 0.5);
 
     // 若 apply 為 true，則將計算得到的偏移量套用到每個控制點座標上
     apply && this._applyPointsOffset();
@@ -318,24 +297,6 @@ fabric.Photo = class extends fabric.Image {
 
     this.width = width;
     this.height = height;
-
-    var correctLeftTop = this.translateToGivenOrigin(
-      {
-        x: left,
-        y: top,
-      },
-      'left',
-      'top',
-      this.originX,
-      this.originY
-    );
-
-    if (typeof options.left === 'undefined') {
-      this.left = correctLeftTop.x;
-    }
-    if (typeof options.top === 'undefined') {
-      this.top = correctLeftTop.y;
-    }
 
     this.pathOffset = {
       x: left,

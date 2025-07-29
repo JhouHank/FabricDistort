@@ -44,3 +44,28 @@ toggleButton.addEventListener('click', () => {
   // 最後請求重新渲染 canvas
   canvas.requestRenderAll();
 });
+
+// --- Zoom Functionality ---
+const zoomLevelDiv = document.getElementById('zoomLevel');
+
+function updateZoomDisplay() {
+  const zoom = canvas.getZoom();
+  zoomLevelDiv.innerText = `${Math.round(zoom * 100)}%`;
+}
+
+canvas.on('mouse:wheel', function (opt) {
+  const delta = opt.e.deltaY;
+  let zoom = canvas.getZoom();
+  zoom *= 0.999 ** delta;
+  if (zoom > 20) zoom = 20;
+  if (zoom < 0.1) zoom = 0.1;
+  canvas.zoomToPoint({ x: opt.e.offsetX, y: opt.e.offsetY }, zoom);
+  opt.e.preventDefault();
+  opt.e.stopPropagation();
+
+  // 更新縮放比例顯示
+  updateZoomDisplay();
+});
+
+// Initial zoom display
+updateZoomDisplay();
