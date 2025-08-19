@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Fabric.js Custom Crop Editor - Definitive Approach</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+    <style>
+      body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; background-color: #f0f0f0; margin: 0; }
+      .controls { margin: 10px; }
+      canvas { border: 1px solid #ccc; }
+    </style>
+</head>
+<body>
+    <h1>圖片外框編輯器</h1>
+    <div class="controls">
+      <input type="file" id="imageLoader" />
+      <button id="saveButton">另存新檔 (PNG)</button>
+    </div>
+    <canvas id="canvas" width="800" height="600"></canvas>
+
+    <script>
+      // ======================================================
+      // 1. 自訂 EditableImage 類別 (使用邊距和裁切模型)
+      // ======================================================
+      fabric.EditableImage = fabric.util.createClass(fabric.Object, {
+        type: 'editable-image',
+        originX: 'center',
+        originY: 'center',
+
+        paddingT: 0, paddingB: 0, paddingL: 0, paddingR: 0,
+
+        initialize: function(imageElement, options) {
+          options || (options = {});
+          this.callSuper('initialize', options);
+          this.image = imageElement;
+          this.width = imageElement.width;
+          this.height = imageElement.height;
+        },
+
+        // _render 負責在 Canvas 上繪製物件
+        _render: function(ctx) {
+          console.log('_render');
+          const halfWidth = this.width / 2;
+          const halfHeight = this.height / 2;
+
+          // a. 繪製紅色背景 (整個物件的邊界)
+          ctx.fillStyle = 'red';
+          ctx.fillRect(-halfWidth, -halfHeight, this.width, this.height);
+
+          // b. 計算來源圖片的裁切區域 (sx, sy, sWidth, sHeight)
+          const sx = Math.max(0, -this.paddingL);
+          const sy = Math.max(0, -this.paddingT);
+          let sWidth = this.image.width - sx - Math.max(0, -this.paddingR);
+          let sHeight = this.image.height - sy - Math.max(0, -this.paddingB);
+
+          // 確保裁切尺寸不為負
+          sWidth = Math.max(0, sWidth);
+          sHeight = Math.max(0, sHeight);
+
+          // c. 計算在物件內部繪製的目標位置 (dx, dy)
+          const dx = -halfWidth + Math.max(0, this.paddingL);
+          const dy = -halfHeight + Math.max(0, this.paddingT);
+
+          // d. 繪製經過裁切和定位的圖片
+          if (sWidth > 0 && sHeight > 0) {
+            ctx.drawImage(this.image, sx, sy, sWidth, sHeight, dx, dy, sWidth, sHeight);
+          }
+        },
+
+        // renderForExport 負責產生最終匯出的圖片
+        renderForExport: function(ctx) {
+            // 【關鍵】將背景填充樣式從紅色改為透明
+            ctx.fillStyle = 'transparent';
+            ctx.fillRect(0, 0, this.width, this.height);
+
+            // b. 計算來源圖片的裁切區域
+            const sx = Math.max(0, -this.paddingL);
+            const sy = Math.max(0, -this.paddingT);
+            let sWidth = this.image.width - sx - Math.max(0, -this.paddingR);
+            let sHeight = this.image.height - sy - Math.max(0, -this.paddingB);
+            sWidth = Math.max(0, sWidth);
+            sHeight = Math.max(0, sHeight);
+
+            // c. 計算目標繪製位置
+            const dx = Math.max(0, this.paddingL);
+            const dy = Math.max(0, this.paddingT);
+
+            // d. 繪製圖片
+            if (sWidth > 0 && sHeight > 0) {
+                ctx.drawImage(this.image, sx, sy, sWidth, sHeight, dx, dy, sWidth, sHeight);
+            }
+        }
+      });
+
+      // ======================================================
+      // 2. Canvas 和事件處理
+      // ======================================================
+      const canvas = new fabric.Canvas('canvas', { backgroundColor: 'white' });
+      const imageLoader = document.getElementById('imageLoader');
+      const saveButton = document.getElementById('saveButton');
+
+      imageLoader.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (f) => {
+          fabric.util.loadImage(f.target.result, (img) => {
+            canvas.clear();
+            const editableImage = new fabric.EditableImage(img);
+            canvas.add(editableImage);
+            editableImage.center();
+            canvas.setActiveObject(editableImage);
+            setupCustomControls(editableImage);
+            canvas.requestRenderAll();
+          });
+        };
+        reader.readAsDataURL(file);
+      });
+
+      saveButton.addEventListener('click', () => {
+        const target = canvas.getActiveObject();
+        if (!target || target.type !== 'editable-image') {
+          alert('請先上傳並選擇圖片!');
+          return;
+        }
+
+        const offscreenCanvas = document.createElement('canvas');
+        offscreenCanvas.width = target.width;
+        offscreenCanvas.height = target.height;
+        const ctx = offscreenCanvas.getContext('2d');
+
+        target.renderForExport(ctx);
+
+        const a = document.createElement('a');
+        a.href = offscreenCanvas.toDataURL('image/png');
+        a.download = 'edited-image.png';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      });
+
+      // ======================================================
+      // 3. 自訂控制點邏輯 (基於邊距模型)
+      // ======================================================
+      function setupCustomControls(obj) {
+        const controlSize = 20;
+        const controlOffset = 15;
+
+        function renderStrip(ctx, left, top) {
+          ctx.save();
+          ctx.strokeStyle = ctx.fillStyle = '#007bff';
+          ctx.lineWidth = 2;
+          const isVertical = this.axis === 'y';
+          const stripWidth = isVertical ? 6 : controlSize;
+          const stripHeight = isVertical ? controlSize : 6;
+          ctx.fillRect(left - stripWidth / 2, top - stripHeight / 2, stripWidth, stripHeight);
+          ctx.restore();
+        }
+
+        // 拖曳控制點的核心邏輯
+        function actionHandler(eventData, transform, x, y) {
+          const target = transform.target;
+          const mouseMove = new fabric.Point(x, y);
+
+          if (!transform.lastGood) {
+            transform.lastGood = new fabric.Point(x, y);
+          }
+          const newPoint = mouseMove.subtract(transform.lastGood);
+          const currentControl = transform.corner;
+
+          // 根據拖動的控制點，更新對應的邊距
+          if (currentControl === 'mt') {
+            target.paddingT -= newPoint.y;
+            // 限制 padding，確保總高度不為負
+            target.paddingT = Math.max(target.paddingT, -(target.image.height + target.paddingB - 1));
+          } else if (currentControl === 'mb') {
+            target.paddingB += newPoint.y;
+            // 限制 padding，確保總高度不為負
+            target.paddingB = Math.max(target.paddingB, -(target.image.height + target.paddingT - 1));
+          } else if (currentControl === 'ml') {
+            target.paddingL -= newPoint.x;
+            // 限制 padding，確保總寬度不為負
+            target.paddingL = Math.max(target.paddingL, -(target.image.width + target.paddingR - 1));
+          } else if (currentControl === 'mr') {
+            target.paddingR += newPoint.x;
+            // 限制 padding，確保總寬度不為負
+            target.paddingR = Math.max(target.paddingR, -(target.image.width + target.paddingL - 1));
+          }
+
+          // 根據圖片原始尺寸和新的邊距，計算物件新的總寬高
+          const newWidth = target.image.width + target.paddingL + target.paddingR;
+          const newHeight = target.image.height + target.paddingT + target.paddingB;
+
+          // 更新物件的尺寸和位置
+          target.set({
+            width: newWidth,
+            height: newHeight,
+            left: target.left + newPoint.x / 2,
+            top: target.top + newPoint.y / 2
+          });
+
+          transform.lastGood.setFromPoint(mouseMove);
+          return true;
+        }
+
+        // 控制點位置基於中心點原點 (-0.5, -0.5) 到 (0.5, 0.5)
+        obj.controls.mt = new fabric.Control({ x: 0, y: -0.5, axis: 'x', offsetY: -controlOffset, cursorStyle: 'ns-resize', render: renderStrip, actionHandler });
+        obj.controls.mb = new fabric.Control({ x: 0, y: 0.5, axis: 'x', offsetY: controlOffset, cursorStyle: 'ns-resize', render: renderStrip, actionHandler });
+        obj.controls.ml = new fabric.Control({ x: -0.5, y: 0, axis: 'y', offsetX: -controlOffset, cursorStyle: 'ew-resize', render: renderStrip, actionHandler });
+        obj.controls.mr = new fabric.Control({ x: 0.5, y: 0, axis: 'y', offsetX: controlOffset, cursorStyle: 'ew-resize', render: renderStrip, actionHandler });
+
+        obj.set({
+          transparentCorners: false,
+          cornerColor: '#007bff',
+          cornerSize: 10,
+          borderColor: '#007bff',
+          borderScaleFactor: 2,
+        });
+        obj.setControlVisible('tl', false);
+        obj.setControlVisible('tr', false);
+        obj.setControlVisible('bl', false);
+        obj.setControlVisible('br', false);
+        obj.setControlVisible('mtr', false);
+
+        canvas.requestRenderAll();
+      }
+    </script>
+</body>
+</html>

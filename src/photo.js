@@ -167,10 +167,10 @@ fabric.Photo = class extends fabric.Image {
 
               // 4. Update the perspective coordinate
               coord[0] =
-                (topLeftBasedLocalPoint.x / target.scaleX) *
+                topLeftBasedLocalPoint.x *
                 fabric.devicePixelRatio;
               coord[1] =
-                (topLeftBasedLocalPoint.y / target.scaleY) *
+                topLeftBasedLocalPoint.y *
                 fabric.devicePixelRatio;
 
               // 5. Normalize the object's geometry based on the new point
