@@ -9,9 +9,26 @@
       body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; background-color: #f0f0f0; margin: 0; }
       .controls { margin: 10px; }
       canvas { border: 1px solid #ccc; }
+      #info-display {
+        position: absolute;
+        top: 15px;
+        right: 15px;
+        background-color: rgba(0, 0, 0, 0.75);
+        color: white;
+        padding: 10px 15px;
+        border-radius: 8px;
+        font-family: monospace;
+        font-size: 14px;
+        z-index: 100;
+        min-width: 230px;
+        line-height: 1.6;
+        white-space: pre;
+        pointer-events: none; /* 讓滑鼠可以穿透此視窗 */
+      }
     </style>
 </head>
 <body>
+    <div id="info-display"></div>
     <h1>圖片外框編輯器</h1>
     <div class="controls">
       <input type="file" id="imageLoader" />
@@ -112,6 +129,7 @@
             editableImage.center();
             canvas.setActiveObject(editableImage);
             setupCustomControls(editableImage);
+            updateInfoWindow(editableImage); // 載入後更新資訊
             canvas.requestRenderAll();
           });
         };
@@ -141,8 +159,28 @@
       });
 
       // ======================================================
-      // 3. 自訂控制點邏輯 (基於邊距模型)
+      // 3. 資訊顯示 & 自訂控制點邏輯
       // ======================================================
+
+      function updateInfoWindow(target) {
+        const infoEl = document.getElementById('info-display');
+        if (!infoEl) return;
+
+        if (!target) {
+          infoEl.innerText = '請上傳並選擇圖片';
+          return;
+        }
+        const content = `原圖尺寸: ${target.image.width} x ${target.image.height}
+擴展 (上): ${Math.round(target.paddingT)}px
+擴展 (下): ${Math.round(target.paddingB)}px
+擴展 (左): ${Math.round(target.paddingL)}px
+擴展 (右): ${Math.round(target.paddingR)}px`;
+        infoEl.innerText = content;
+      }
+
+      // 頁面初始時更新一次
+      updateInfoWindow(null);
+
       function setupCustomControls(obj) {
         const controlSize = 20;
         const controlOffset = 15;
@@ -162,28 +200,54 @@
         function actionHandler(eventData, transform, x, y) {
           const target = transform.target;
           const mouseMove = new fabric.Point(x, y);
+          const snap = 8; // 以 8px 為一個單位
 
+          // 首次執行時，初始化累加器和 lastGood
           if (!transform.lastGood) {
             transform.lastGood = new fabric.Point(x, y);
+            transform.accX = 0;
+            transform.accY = 0;
           }
+
+          // 取得自上次呼叫以來的實際滑鼠移動量
           const newPoint = mouseMove.subtract(transform.lastGood);
+
+          // 將移動量加到累加器中
+          transform.accX += newPoint.x;
+          transform.accY += newPoint.y;
+
+          // 計算應該吸附的變化量 (取整數倍)
+          const snappedChangeX = Math.trunc(transform.accX / snap) * snap;
+          const snappedChangeY = Math.trunc(transform.accY / snap) * snap;
+
+          // 如果沒有達到一個吸附單位，則不進行任何操作
+          if (snappedChangeX === 0 && snappedChangeY === 0) {
+            transform.lastGood.setFromPoint(mouseMove);
+            return true; // 保持 transform 活躍
+          }
+
+          // 從累加器中減去已應用的變化量
+          transform.accX -= snappedChangeX;
+          transform.accY -= snappedChangeY;
+
+          // 使用吸附後的變化量 (snappedChangeX/Y) 來更新
           const currentControl = transform.corner;
 
           // 根據拖動的控制點，更新對應的邊距
           if (currentControl === 'mt') {
-            target.paddingT -= newPoint.y;
+            target.paddingT -= snappedChangeY;
             // 限制 padding，確保總高度不為負
             target.paddingT = Math.max(target.paddingT, -(target.image.height + target.paddingB - 1));
           } else if (currentControl === 'mb') {
-            target.paddingB += newPoint.y;
+            target.paddingB += snappedChangeY;
             // 限制 padding，確保總高度不為負
             target.paddingB = Math.max(target.paddingB, -(target.image.height + target.paddingT - 1));
           } else if (currentControl === 'ml') {
-            target.paddingL -= newPoint.x;
+            target.paddingL -= snappedChangeX;
             // 限制 padding，確保總寬度不為負
             target.paddingL = Math.max(target.paddingL, -(target.image.width + target.paddingR - 1));
           } else if (currentControl === 'mr') {
-            target.paddingR += newPoint.x;
+            target.paddingR += snappedChangeX;
             // 限制 padding，確保總寬度不為負
             target.paddingR = Math.max(target.paddingR, -(target.image.width + target.paddingL - 1));
           }
@@ -196,9 +260,11 @@
           target.set({
             width: newWidth,
             height: newHeight,
-            left: target.left + newPoint.x / 2,
-            top: target.top + newPoint.y / 2
+            left: target.left + snappedChangeX / 2,
+            top: target.top + snappedChangeY / 2
           });
+
+          updateInfoWindow(target); // 拖曳時即時更新資訊
 
           transform.lastGood.setFromPoint(mouseMove);
           return true;

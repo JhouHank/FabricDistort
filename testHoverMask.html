@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>圖片遮罩高亮工具</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.0/fabric.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .controls {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        
+        .upload-group {
+            display: inline-block;
+            margin-right: 20px;
+            margin-bottom: 10px;
+        }
+        
+        .upload-btn {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        
+        .upload-btn:hover {
+            background: #0056b3;
+        }
+        
+        .file-input {
+            display: none;
+        }
+        
+        .status {
+            margin-top: 15px;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .canvas-container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        
+        #canvas {
+            border: 1px solid #ddd;
+            max-width: 100%;
+        }
+        
+        .instructions {
+            margin-top: 15px;
+            color: #666;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>圖片遮罩高亮工具</h1>
+        
+        <div class="controls">
+            <div class="upload-group">
+                <button class="upload-btn" onclick="document.getElementById('originalInput').click()">
+                    上傳原始圖片
+                </button>
+                <input type="file" id="originalInput" class="file-input" accept="image/*">
+            </div>
+            
+            <div class="upload-group">
+                <button class="upload-btn" onclick="document.getElementById('maskInput').click()">
+                    上傳遮罩圖片
+                </button>
+                <input type="file" id="maskInput" class="file-input" accept="image/*">
+            </div>
+            
+            <div id="status" class="status" style="display: none;"></div>
+        </div>
+        
+        <div class="canvas-container">
+            <canvas id="canvas"></canvas>
+            <div class="instructions">
+                <p>上傳兩張圖片後，將滑鼠移動到原始圖片上可預覽高亮效果</p>
+                <p>點擊可鎖定高亮區域（紅色），可同時鎖定多個區域，再次點擊相同區域可取消鎖定</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 初始化變數
+        let canvas;
+        let originalImage = null;
+        let maskImage = null;
+        let maskCanvas = null;
+        let maskContext = null;
+        let hoverOverlay = null; // 懸停高亮層
+        let lockedOverlays = new Map(); // 鎖定高亮層 (顏色 -> overlay)
+        let lockedRegions = new Set();
+        let currentHoverColor = null;
+        let isProcessing = false;
+
+        // 初始化 Canvas
+        function initCanvas() {
+            canvas = new fabric.Canvas('canvas', {
+                selection: false,
+                hoverCursor: 'pointer',
+                moveCursor: 'pointer'
+            });
+        }
+
+        // 顯示狀態訊息
+        function showStatus(message, type = 'success') {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+            statusDiv.style.display = 'block';
+            
+            setTimeout(() => {
+                statusDiv.style.display = 'none';
+            }, 3000);
+        }
+
+        // 載入圖片
+        function loadImage(file, callback) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const img = new Image();
+                img.onload = function() {
+                    callback(img);
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // 創建遮罩 Canvas
+        function createMaskCanvas(img, targetWidth, targetHeight) {
+            const maskCanvasEl = document.createElement('canvas');
+            maskCanvasEl.width = targetWidth;
+            maskCanvasEl.height = targetHeight;
+            const ctx = maskCanvasEl.getContext('2d');
+            // 將遮罩圖片縮放到與原始圖片相同尺寸
+            ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+            return { canvas: maskCanvasEl, context: ctx };
+        }
+
+        // 獲取像素顏色
+        function getPixelColor(x, y) {
+            if (!maskContext || x < 0 || y < 0) return null;
+            
+            const imageData = maskContext.getImageData(x, y, 1, 1);
+            const [r, g, b] = imageData.data;
+            return `${r},${g},${b}`;
+        }
+
+        // 創建高亮遮罩
+        function createHighlightMask(targetColor, isLocked = false) {
+            if (!maskCanvas || !targetColor) return null;
+
+            const width = maskCanvas.width;
+            const height = maskCanvas.height;
+            const imageData = maskContext.getImageData(0, 0, width, height);
+            const data = imageData.data;
+            
+            // 創建高亮遮罩
+            const highlightCanvas = document.createElement('canvas');
+            highlightCanvas.width = width;
+            highlightCanvas.height = height;
+            const highlightCtx = highlightCanvas.getContext('2d');
+            const highlightImageData = highlightCtx.createImageData(width, height);
+            const highlightData = highlightImageData.data;
+            
+            const [targetR, targetG, targetB] = targetColor.split(',').map(Number);
+            
+            // 根據是否鎖定選擇顏色
+            const [highlightR, highlightG, highlightB] = isLocked ? [255, 0, 0] : [255, 255, 255]; // 鎖定=紅色，懸停=白色
+            
+            for (let i = 0; i < data.length; i += 4) {
+                const r = data[i];
+                const g = data[i + 1];
+                const b = data[i + 2];
+                
+                // 檢查顏色是否匹配（允許小幅差異）
+                if (Math.abs(r - targetR) <= 5 && Math.abs(g - targetG) <= 5 && Math.abs(b - targetB) <= 5) {
+                    highlightData[i] = highlightR;     // R
+                    highlightData[i + 1] = highlightG; // G
+                    highlightData[i + 2] = highlightB; // B
+                    highlightData[i + 3] = 64;  // A (25% 透明度)
+                } else {
+                    highlightData[i + 3] = 0;   // 完全透明
+                }
+            }
+            
+            highlightCtx.putImageData(highlightImageData, 0, 0);
+            return highlightCanvas;
+        }
+
+        // 更新懸停高亮效果
+        function updateHoverHighlight(targetColor) {
+            if (isProcessing) return;
+            isProcessing = true;
+
+            // 移除舊的懸停高亮
+            if (hoverOverlay) {
+                canvas.remove(hoverOverlay);
+                hoverOverlay = null;
+            }
+
+            if (targetColor && !lockedRegions.has(targetColor)) {
+                const highlightCanvas = createHighlightMask(targetColor, false);
+                if (highlightCanvas) {
+                    fabric.Image.fromURL(highlightCanvas.toDataURL(), (img) => {
+                        hoverOverlay = img;
+                        hoverOverlay.set({
+                            left: originalImage.left,
+                            top: originalImage.top,
+                            scaleX: originalImage.scaleX,
+                            scaleY: originalImage.scaleY,
+                            selectable: false,
+                            evented: false,
+                            excludeFromExport: true
+                        });
+                        
+                        canvas.add(hoverOverlay);
+                        canvas.renderAll();
+                        isProcessing = false;
+                    });
+                    return;
+                }
+            }
+            isProcessing = false;
+        }
+
+        // 新增鎖定高亮區域
+        function addLockedHighlight(targetColor) {
+            if (lockedRegions.has(targetColor) || !targetColor) return;
+
+            const highlightCanvas = createHighlightMask(targetColor, true);
+            if (highlightCanvas) {
+                fabric.Image.fromURL(highlightCanvas.toDataURL(), (img) => {
+                    const lockedOverlay = img;
+                    lockedOverlay.set({
+                        left: originalImage.left,
+                        top: originalImage.top,
+                        scaleX: originalImage.scaleX,
+                        scaleY: originalImage.scaleY,
+                        selectable: false,
+                        evented: false,
+                        excludeFromExport: true
+                    });
+                    
+                    lockedOverlays.set(targetColor, lockedOverlay);
+                    lockedRegions.add(targetColor);
+                    canvas.add(lockedOverlay);
+                    canvas.renderAll();
+                });
+            }
+        }
+
+        // 移除鎖定高亮區域
+        function removeLockedHighlight(targetColor) {
+            if (!lockedRegions.has(targetColor)) return;
+
+            const overlay = lockedOverlays.get(targetColor);
+            if (overlay) {
+                canvas.remove(overlay);
+                lockedOverlays.delete(targetColor);
+                lockedRegions.delete(targetColor);
+                canvas.renderAll();
+            }
+        }
+
+        // 設置圖片和事件
+        function setupImageInteraction() {
+            if (!originalImage || !maskImage) return;
+
+            // 設置 Canvas 尺寸
+            canvas.setWidth(originalImage.width);
+            canvas.setHeight(originalImage.height);
+
+            // 滑鼠移動事件
+            canvas.on('mouse:move', function(options) {
+                if (!options.e || isProcessing) return;
+
+                const pointer = canvas.getPointer(options.e);
+                const x = Math.floor(pointer.x);
+                const y = Math.floor(pointer.y);
+                
+                const color = getPixelColor(x, y);
+                
+                if (color && color !== currentHoverColor) {
+                    currentHoverColor = color;
+                    // 只有非鎖定區域才顯示懸停高亮
+                    updateHoverHighlight(color);
+                }
+            });
+
+            // 滑鼠離開事件
+            canvas.on('mouse:out', function() {
+                // 清除懸停高亮，但保持所有鎖定高亮
+                if (currentHoverColor) {
+                    currentHoverColor = null;
+                    updateHoverHighlight(null);
+                }
+            });
+
+            // 點擊事件
+            canvas.on('mouse:down', function(options) {
+                if (!options.e || isProcessing) return;
+
+                const pointer = canvas.getPointer(options.e);
+                const x = Math.floor(pointer.x);
+                const y = Math.floor(pointer.y);
+                
+                const color = getPixelColor(x, y);
+                
+                if (color) {
+                    if (lockedRegions.has(color)) {
+                        // 取消鎖定
+                        removeLockedHighlight(color);
+                        showStatus('已取消鎖定高亮區域');
+                        // 如果當前懸停的就是這個區域，重新顯示懸停高亮
+                        if (currentHoverColor === color) {
+                            updateHoverHighlight(color);
+                        }
+                    } else {
+                        // 新增鎖定高亮
+                        addLockedHighlight(color);
+                        showStatus('已鎖定高亮區域');
+                        // 移除懸停高亮，因為現在是鎖定狀態
+                        if (currentHoverColor === color) {
+                            updateHoverHighlight(null);
+                        }
+                    }
+                }
+            });
+        }
+
+        // 處理原始圖片上傳
+        document.getElementById('originalInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            loadImage(file, function(img) {
+                fabric.Image.fromURL(img.src, function(fabricImg) {
+                    if (originalImage) {
+                        canvas.remove(originalImage);
+                    }
+                    
+                    originalImage = fabricImg;
+                    originalImage.set({
+                        left: 0,
+                        top: 0,
+                        selectable: false,
+                        evented: false
+                    });
+                    
+                    canvas.add(originalImage);
+                    canvas.setWidth(img.width);
+                    canvas.setHeight(img.height);
+                    canvas.renderAll();
+                    
+                    showStatus('原始圖片上傳成功');
+                    
+                    // 如果遮罩圖片也已上傳，創建對應尺寸的遮罩Canvas
+                    if (maskImage) {
+                        const maskData = createMaskCanvas(maskImage, img.width, img.height);
+                        maskCanvas = maskData.canvas;
+                        maskContext = maskData.context;
+                        setupImageInteraction();
+                    }
+                });
+            });
+        });
+
+        // 處理遮罩圖片上傳
+        document.getElementById('maskInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            loadImage(file, function(img) {
+                maskImage = img;
+                
+                // 如果原始圖片已上傳，使用原始圖片的尺寸創建遮罩
+                if (originalImage) {
+                    const maskData = createMaskCanvas(img, originalImage.width, originalImage.height);
+                    maskCanvas = maskData.canvas;
+                    maskContext = maskData.context;
+                    setupImageInteraction();
+                } else {
+                    // 如果原始圖片未上傳，暫時儲存遮罩圖片
+                    console.log('遮罩圖片已載入，等待原始圖片...');
+                }
+                
+                showStatus('遮罩圖片上傳成功');
+            });
+        });
+
+        // 初始化
+        window.addEventListener('load', function() {
+            initCanvas();
+            showStatus('請先上傳原始圖片和遮罩圖片', 'error');
+        });
+    </script>
+</body>
+</html>
